@@ -1,0 +1,40 @@
+ARG OFFICIAL_IMAGE_TAG=12.8
+
+FROM postgres:$OFFICIAL_IMAGE_TAG AS base
+ARG PLV8_VERSION=2.3.15
+ENV PLV8_VERSION=${PLV8_VERSION}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libc++-dev
+
+
+FROM base AS builder_deps
+ARG PLV8_DEPS="wget ca-certificates git g++ lbzip2 python python3 pkg-config libc++abi-dev make postgresql-server-dev-$PG_MAJOR"
+RUN apt-get update \
+# Ideally, libtinfo5 should have been part of 'PLV8_DEPENDENCIES'
+# but some versions of the debian have it installed as an essential
+# package (buster, postgres 12, for example does not), which means
+# that there would be an error at 'apt-get remove -y ${PLV8_DEPENDENCIES}'
+    && apt-get install -y --no-install-recommends libtinfo5 ${PLV8_DEPS}
+
+FROM builder_deps AS build_plv8
+# # Install plv8
+RUN cd /root \ 
+  && git config --global user.email "postgres-plv8-docker-images@draakhan.info" \
+  && git config --global user.name "Bartek \"Draakhan\" Szymański" \
+  && wget "https://github.com/plv8/plv8/archive/v$PLV8_VERSION.tar.gz" \
+  && tar -xf "v$PLV8_VERSION.tar.gz" \
+  && cd "plv8-$PLV8_VERSION" && make && make install
+    
+FROM base AS final
+COPY --from=build /usr/share/postgresql/${PG_MAJOR}/extension/plcoffee* /usr/share/postgresql/${PG_MAJOR}/extension/
+COPY --from=build /usr/share/postgresql/${PG_MAJOR}/extension/plls* /usr/share/postgresql/${PG_MAJOR}/extension/
+COPY --from=build /usr/share/postgresql/${PG_MAJOR}/extension/plv8* /usr/share/postgresql/${PG_MAJOR}/extension/
+
+COPY --from=build /usr/lib/postgresql/${PG_MAJOR}/lib/plv8-${PLV8_VERSION}.so /usr/lib/postgresql/${PG_MAJOR}/lib/plv8-${PLV8_VERSION}.so
+COPY --from=build /usr/lib/postgresql/${PG_MAJOR}/lib/pgxs /usr/lib/postgresql/${PG_MAJOR}/lib/pgxs
+
+COPY --from=build /usr/lib/postgresql/${PG_MAJOR}/bin/pg_config /usr/lib/postgresql/${PG_MAJOR}/bin/pg_config
+RUN chmod -R 644 /usr/share/postgresql/${PG_MAJOR}/extension/plcoffee* /usr/share/postgresql/${PG_MAJOR}/extension/plls* /usr/share/postgresql/${PG_MAJOR}/extension/plv8* 
+RUN chmod 755 /usr/lib/postgresql/${PG_MAJOR}/lib/plv8-${PLV8_VERSION}.so
+RUN chmod 755 /usr/lib/postgresql/${PG_MAJOR}/bin/pg_config
